@@ -1,0 +1,13 @@
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import 'dotenv/config';
+if (!existsSync('.env')) writeFileSync('.env', `DATABASE_URL="file:./dev.db"\nJWT_SECRET="${randomBytes(48).toString('hex')}"\nAPP_URL=http://localhost:5173\nPORT=4000\n`);
+const mysql = process.argv.includes('--mysql');
+const schema = readFileSync('prisma/schema.prisma', 'utf8');
+writeFileSync('prisma/schema.local.prisma', schema.replace('provider = "mysql"', 'provider = "sqlite"'));
+const selected = mysql ? 'prisma/schema.prisma' : 'prisma/schema.local.prisma';
+const run = args => execFileSync(process.execPath, ['node_modules/prisma/build/index.js', ...args, '--schema', selected], {stdio: 'inherit'});
+run(['generate']);
+run(['db', 'push']);
+if (!mysql) execFileSync(process.execPath, ['prisma/seed.mjs'], {stdio: 'inherit'});

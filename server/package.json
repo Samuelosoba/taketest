@@ -1,6 +1,6 @@
 {
   "dependencies": {
-    "@prisma/client": "^7.9.1",
+    "@prisma/client": "^6.19.0",
     "bcrypt": "^6.0.0",
     "cloudinary": "^2.10.0",
     "compression": "^1.8.1",
@@ -14,10 +14,23 @@
     "morgan": "^1.11.0",
     "multer": "^2.2.0",
     "nodemailer": "^9.0.4",
-    "uuid": "^14.0.1"
+    "pdfkit": "^0.20.2",
+    "qrcode": "^1.5.4",
+    "uuid": "^14.0.1",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "nodemon": "^3.1.14",
-    "prisma": "^7.9.1"
+    "prisma": "^6.19.0"
+  },
+  "name": "assessmentdesk-server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/index.js",
+    "start": "node src/index.js",
+    "db:setup": "node scripts/setup.mjs",
+    "db:mysql": "node scripts/setup.mjs --mysql",
+    "test": "node --test --test-concurrency=1 test/*.test.js"
   }
 }

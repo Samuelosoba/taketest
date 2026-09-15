@@ -1,0 +1,10 @@
+{
+  "name": "assessmentdesk", "private": true,
+  "scripts": {
+    "setup": "npm --prefix server install && npm --prefix client install && npm --prefix server run db:setup",
+    "dev": "node scripts/dev.mjs",
+    "build": "npm --prefix client run build",
+    "test": "npm --prefix server test",
+    "start": "npm --prefix server start"
+  }
+}

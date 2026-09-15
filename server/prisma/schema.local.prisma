@@ -1,0 +1,203 @@
+generator client {
+  provider = "prisma-client-js"
+}
+datasource db {
+  provider = "sqlite"
+  url = env("DATABASE_URL")
+}
+model Institution {
+  id String @id @default(cuid())
+  name String
+  slug String @unique
+  email String
+  phone String @default("")
+  address String @default("")
+  website String @default("")
+  description String @default("")
+  status String @default("ACTIVE")
+  settings Json
+  createdAt DateTime @default(now())
+  users User[]
+  courses Course[]
+  exams Exam[]
+  questions Question[]
+  subscriptions Subscription[]
+}
+model User {
+  id String @id @default(cuid())
+  institutionId String?
+  institution Institution? @relation(fields: [institutionId], references: [id])
+  name String
+  email String @unique
+  password String
+  role String @default("STUDENT")
+  active Boolean @default(true)
+  emailVerified Boolean @default(false)
+  studentNumber String?
+  createdAt DateTime @default(now())
+  attempts ExamAttempt[]
+  payments Payment[]
+  sessions RefreshToken[]
+  tokens AccountToken[]
+  @@index([institutionId, role])
+}
+model Course {
+  id String @id @default(cuid())
+  institutionId String
+  institution Institution @relation(fields: [institutionId], references: [id])
+  title String
+  code String
+  description String
+  status String @default("PUBLISHED")
+  createdAt DateTime @default(now())
+  exams Exam[]
+  @@unique([institutionId, code])
+}
+model Exam {
+  id String @id @default(cuid())
+  institutionId String
+  institution Institution @relation(fields: [institutionId], references: [id])
+  courseId String
+  course Course @relation(fields: [courseId], references: [id])
+  title String
+  description String
+  duration Int @default(30)
+  passMark Int @default(50)
+  price Int @default(0)
+  currency String @default("NGN")
+  maxAttempts Int @default(1)
+  status String @default("DRAFT")
+  startsAt DateTime?
+  endsAt DateTime?
+  shuffleQuestions Boolean @default(true)
+  shuffleOptions Boolean @default(true)
+  releaseResults Boolean @default(true)
+  fullscreen Boolean @default(false)
+  createdAt DateTime @default(now())
+  questions ExamQuestion[]
+  attempts ExamAttempt[]
+  payments Payment[]
+  @@index([institutionId, status])
+}
+model Question {
+  id String @id @default(cuid())
+  institutionId String
+  institution Institution @relation(fields: [institutionId], references: [id])
+  text String
+  type String @default("SINGLE")
+  difficulty String @default("MEDIUM")
+  subject String @default("")
+  marks Int @default(1)
+  options Json
+  acceptedAnswers Json
+  imageUrl String @default("")
+  createdAt DateTime @default(now())
+  exams ExamQuestion[]
+  @@index([institutionId, type])
+}
+model ExamQuestion {
+  examId String
+  questionId String
+  exam Exam @relation(fields: [examId], references: [id], onDelete: Cascade)
+  question Question @relation(fields: [questionId], references: [id])
+  @@id([examId, questionId])
+}
+model ExamAttempt {
+  id String @id @default(cuid())
+  institutionId String
+  examId String
+  exam Exam @relation(fields: [examId], references: [id])
+  studentId String
+  student User @relation(fields: [studentId], references: [id])
+  number Int
+  status String @default("STARTED")
+  startedAt DateTime @default(now())
+  expectedEndAt DateTime
+  submittedAt DateTime?
+  snapshot Json
+  answers Json
+  ip String
+  userAgent String
+  version Int @default(0)
+  result Result?
+  violations ExamViolation[]
+  @@unique([studentId, examId, number])
+  @@index([institutionId, status, expectedEndAt])
+}
+model Result {
+  id String @id @default(cuid())
+  institutionId String
+  attemptId String @unique
+  attempt ExamAttempt @relation(fields: [attemptId], references: [id])
+  totalMarks Int
+  obtainedMarks Float
+  percentage Float
+  grade String
+  passed Boolean
+  status String
+  breakdown Json
+  released Boolean
+  createdAt DateTime @default(now())
+  certificate Certificate?
+  @@index([institutionId, released])
+}
+model Payment {
+  id String @id @default(cuid())
+  institutionId String
+  studentId String
+  student User @relation(fields: [studentId], references: [id])
+  examId String
+  exam Exam @relation(fields: [examId], references: [id])
+  reference String @unique
+  amount Int
+  currency String @default("NGN")
+  status String @default("PENDING")
+  paidAt DateTime?
+  createdAt DateTime @default(now())
+  @@index([institutionId, studentId, examId, status])
+}
+model Certificate {
+  id String @id @default(cuid())
+  resultId String @unique
+  result Result @relation(fields: [resultId], references: [id])
+  code String @unique
+  createdAt DateTime @default(now())
+}
+model RefreshToken {
+  id String @id
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+}
+model AccountToken {
+  id String @id
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type String
+  expiresAt DateTime
+}
+model ExamViolation {
+  id String @id @default(cuid())
+  attemptId String
+  attempt ExamAttempt @relation(fields: [attemptId], references: [id])
+  type String
+  createdAt DateTime @default(now())
+}
+model AuditLog {
+  id String @id @default(cuid())
+  institutionId String?
+  userId String?
+  action String
+  targetId String
+  createdAt DateTime @default(now())
+  @@index([institutionId, createdAt])
+}
+model Subscription {
+  id String @id @default(cuid())
+  institutionId String
+  institution Institution @relation(fields: [institutionId], references: [id])
+  plan String @default("STARTER")
+  status String @default("TRIAL")
+  endsAt DateTime
+  createdAt DateTime @default(now())
+}

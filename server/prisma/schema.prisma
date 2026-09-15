@@ -13,7 +13,7 @@ model Institution {
   phone String @default("")
   address String @default("")
   website String @default("")
-  description String @default("")
+  description String @default("") @db.Text
   status String @default("ACTIVE")
   settings Json
   createdAt DateTime @default(now())
@@ -47,7 +47,7 @@ model Course {
   institution Institution @relation(fields: [institutionId], references: [id])
   title String
   code String
-  description String
+  description String @db.Text
   status String @default("PUBLISHED")
   createdAt DateTime @default(now())
   exams Exam[]
@@ -60,7 +60,7 @@ model Exam {
   courseId String
   course Course @relation(fields: [courseId], references: [id])
   title String
-  description String
+  description String @db.Text
   duration Int @default(30)
   passMark Int @default(50)
   price Int @default(0)
@@ -83,14 +83,14 @@ model Question {
   id String @id @default(cuid())
   institutionId String
   institution Institution @relation(fields: [institutionId], references: [id])
-  text String
+  text String @db.Text
   type String @default("SINGLE")
   difficulty String @default("MEDIUM")
   subject String @default("")
   marks Int @default(1)
   options Json
   acceptedAnswers Json
-  imageUrl String @default("")
+  imageUrl String @default("") @db.Text
   createdAt DateTime @default(now())
   exams ExamQuestion[]
   @@index([institutionId, type])

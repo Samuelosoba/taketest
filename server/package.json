@@ -21,7 +21,7 @@
   },
   "devDependencies": {
     "nodemon": "^3.1.14",
-    "prisma": "^6.19.0"
+    "prisma": "6.19.0"
   },
   "name": "assessmentdesk-server",
   "private": true,
@@ -32,5 +32,9 @@
     "db:setup": "node scripts/setup.mjs",
     "db:mysql": "node scripts/setup.mjs --mysql",
     "test": "node --test --test-concurrency=1 test/*.test.js"
+  },
+  "overrides": {
+    "effect": "3.20.0",
+    "deepmerge-ts": "8.0.0"
   }
 }

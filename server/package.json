@@ -31,7 +31,8 @@
     "start": "node src/index.js",
     "db:setup": "node scripts/setup.mjs",
     "db:mysql": "node scripts/setup.mjs --mysql",
-    "test": "node --test --test-concurrency=1 test/*.test.js"
+    "test": "node --test --test-concurrency=1 test/*.test.js",
+    "owner:create": "node scripts/create-owner.mjs"
   },
   "overrides": {
     "effect": "3.20.0",

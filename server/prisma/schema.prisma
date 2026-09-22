@@ -9,11 +9,11 @@ model Institution {
   id String @id @default(cuid())
   name String
   slug String @unique
-  email String
+  email String @db.VarChar(254)
   phone String @default("")
-  address String @default("")
-  website String @default("")
-  description String @default("") @db.Text
+  address String @default("") @db.VarChar(500)
+  website String @default("") @db.VarChar(2048)
+  description String @default("") @db.VarChar(2000)
   status String @default("ACTIVE")
   settings Json
   createdAt DateTime @default(now())
@@ -28,7 +28,7 @@ model User {
   institutionId String?
   institution Institution? @relation(fields: [institutionId], references: [id])
   name String
-  email String @unique
+  email String @unique @db.VarChar(254)
   password String
   role String @default("STUDENT")
   active Boolean @default(true)
@@ -73,6 +73,7 @@ model Exam {
   shuffleOptions Boolean @default(true)
   releaseResults Boolean @default(true)
   fullscreen Boolean @default(false)
+  cameraRequired Boolean @default(false)
   createdAt DateTime @default(now())
   questions ExamQuestion[]
   attempts ExamAttempt[]
@@ -90,7 +91,7 @@ model Question {
   marks Int @default(1)
   options Json
   acceptedAnswers Json
-  imageUrl String @default("") @db.Text
+  imageUrl String @default("") @db.VarChar(2048)
   createdAt DateTime @default(now())
   exams ExamQuestion[]
   @@index([institutionId, type])
@@ -117,12 +118,15 @@ model ExamAttempt {
   snapshot Json
   answers Json
   ip String
-  userAgent String
+  userAgent String @db.VarChar(255)
   version Int @default(0)
+  lastSeenAt DateTime?
+  disconnectedAt DateTime?
   result Result?
   violations ExamViolation[]
   @@unique([studentId, examId, number])
   @@index([institutionId, status, expectedEndAt])
+  @@index([status, lastSeenAt])
 }
 model Result {
   id String @id @default(cuid())
@@ -181,7 +185,9 @@ model ExamViolation {
   attemptId String
   attempt ExamAttempt @relation(fields: [attemptId], references: [id])
   type String
+  clientEventId String? @unique
   createdAt DateTime @default(now())
+  @@index([attemptId, createdAt])
 }
 model AuditLog {
   id String @id @default(cuid())

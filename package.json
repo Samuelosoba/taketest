@@ -1,10 +1,11 @@
 {
-  "name": "assessmentdesk", "private": true,
+  "name": "assessmentdesk",
+  "private": true,
   "scripts": {
     "setup": "npm --prefix server install && npm --prefix client install && npm --prefix server run db:setup",
     "dev": "node scripts/dev.mjs",
     "build": "npm --prefix client run build",
-    "test": "npm --prefix server test",
+    "test": "npm --prefix server test && npm --prefix client run test:unit",
     "start": "npm --prefix server start"
   }
 }

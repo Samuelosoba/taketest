@@ -73,6 +73,7 @@ model Exam {
   shuffleOptions Boolean @default(true)
   releaseResults Boolean @default(true)
   fullscreen Boolean @default(false)
+  cameraRequired Boolean @default(false)
   createdAt DateTime @default(now())
   questions ExamQuestion[]
   attempts ExamAttempt[]
@@ -119,10 +120,13 @@ model ExamAttempt {
   ip String
   userAgent String
   version Int @default(0)
+  lastSeenAt DateTime?
+  disconnectedAt DateTime?
   result Result?
   violations ExamViolation[]
   @@unique([studentId, examId, number])
   @@index([institutionId, status, expectedEndAt])
+  @@index([status, lastSeenAt])
 }
 model Result {
   id String @id @default(cuid())
@@ -181,7 +185,9 @@ model ExamViolation {
   attemptId String
   attempt ExamAttempt @relation(fields: [attemptId], references: [id])
   type String
+  clientEventId String? @unique
   createdAt DateTime @default(now())
+  @@index([attemptId, createdAt])
 }
 model AuditLog {
   id String @id @default(cuid())

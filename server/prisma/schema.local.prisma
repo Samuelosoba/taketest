@@ -1,6 +1,10 @@
 generator client {
   provider = "prisma-client-js"
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
 }
+// Production: PostgreSQL (e.g. Neon). DATABASE_URL may be a pooled connection;
+// migrations use the direct one. Local development generates a SQLite copy
+// of this file (scripts/local-schema.mjs).
 datasource db {
   provider = "sqlite"
   url = env("DATABASE_URL")
@@ -16,19 +20,24 @@ model Institution {
   description String @default("")
   status String @default("ACTIVE")
   settings Json
+  allowedOrigins Json?
   createdAt DateTime @default(now())
   users User[]
   courses Course[]
   exams Exam[]
   questions Question[]
   subscriptions Subscription[]
+  apiKeys ApiKey[]
+  webhookEndpoints WebhookEndpoint[]
 }
 model User {
   id String @id @default(cuid())
   institutionId String?
   institution Institution? @relation(fields: [institutionId], references: [id])
+  externalId String?
   name String
-  email String @unique
+  // Null for partner-managed students, who never sign in with a password.
+  email String? @unique
   password String
   role String @default("STUDENT")
   active Boolean @default(true)
@@ -40,11 +49,13 @@ model User {
   sessions RefreshToken[]
   tokens AccountToken[]
   @@index([institutionId, role])
+  @@unique([institutionId, externalId])
 }
 model Course {
   id String @id @default(cuid())
   institutionId String
   institution Institution @relation(fields: [institutionId], references: [id])
+  externalId String?
   title String
   code String
   description String
@@ -52,11 +63,13 @@ model Course {
   createdAt DateTime @default(now())
   exams Exam[]
   @@unique([institutionId, code])
+  @@unique([institutionId, externalId])
 }
 model Exam {
   id String @id @default(cuid())
   institutionId String
   institution Institution @relation(fields: [institutionId], references: [id])
+  externalId String?
   courseId String
   course Course @relation(fields: [courseId], references: [id])
   title String
@@ -74,16 +87,20 @@ model Exam {
   releaseResults Boolean @default(true)
   fullscreen Boolean @default(false)
   cameraRequired Boolean @default(false)
+  // OPEN: listed for students. LAUNCH_ONLY: started only through a partner launch.
+  accessMode String @default("OPEN")
   createdAt DateTime @default(now())
   questions ExamQuestion[]
   attempts ExamAttempt[]
   payments Payment[]
   @@index([institutionId, status])
+  @@unique([institutionId, externalId])
 }
 model Question {
   id String @id @default(cuid())
   institutionId String
   institution Institution @relation(fields: [institutionId], references: [id])
+  externalId String?
   text String
   type String @default("SINGLE")
   difficulty String @default("MEDIUM")
@@ -95,6 +112,7 @@ model Question {
   createdAt DateTime @default(now())
   exams ExamQuestion[]
   @@index([institutionId, type])
+  @@unique([institutionId, externalId])
 }
 model ExamQuestion {
   examId String
@@ -122,6 +140,7 @@ model ExamAttempt {
   version Int @default(0)
   lastSeenAt DateTime?
   disconnectedAt DateTime?
+  launchId String?
   result Result?
   violations ExamViolation[]
   @@unique([studentId, examId, number])
@@ -193,6 +212,7 @@ model AuditLog {
   id String @id @default(cuid())
   institutionId String?
   userId String?
+  apiKeyId String?
   action String
   targetId String
   createdAt DateTime @default(now())
@@ -206,4 +226,70 @@ model Subscription {
   status String @default("TRIAL")
   endsAt DateTime
   createdAt DateTime @default(now())
+}
+// Partner integration. Secret values are stored only as SHA-256 hashes, except
+// webhook signing secrets, which must be readable to sign deliveries.
+model ApiKey {
+  id String @id @default(cuid())
+  institutionId String
+  institution Institution @relation(fields: [institutionId], references: [id])
+  name String
+  prefix String @unique
+  hash String @unique
+  scopes Json
+  lastUsedAt DateTime?
+  expiresAt DateTime?
+  revokedAt DateTime?
+  createdById String?
+  createdAt DateTime @default(now())
+  @@index([institutionId])
+}
+model WebhookEndpoint {
+  id String @id @default(cuid())
+  institutionId String
+  institution Institution @relation(fields: [institutionId], references: [id])
+  url String
+  secret String
+  events Json
+  active Boolean @default(true)
+  createdAt DateTime @default(now())
+  deliveries WebhookDelivery[]
+  @@index([institutionId])
+}
+model WebhookDelivery {
+  id String @id @default(cuid())
+  endpointId String
+  endpoint WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+  eventId String
+  eventType String
+  payload Json
+  status String @default("PENDING")
+  attempts Int @default(0)
+  nextAttemptAt DateTime @default(now())
+  lastStatus Int?
+  lastError String?
+  createdAt DateTime @default(now())
+  @@index([status, nextAttemptAt])
+  @@index([endpointId, createdAt])
+}
+model LaunchToken {
+  id String @id
+  institutionId String
+  userId String
+  examId String
+  returnUrl String @default("")
+  usedAt DateTime?
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  @@index([institutionId, createdAt])
+}
+model IdempotencyKey {
+  institutionId String
+  key String
+  requestHash String
+  status Int
+  response Json
+  createdAt DateTime @default(now())
+  @@id([institutionId, key])
+  @@index([createdAt])
 }

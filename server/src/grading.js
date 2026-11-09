@@ -1,5 +1,6 @@
 import { db, fail } from "./core.js";
 import { monitoringToken } from "./proctoring.js";
+import { emit, attemptEvent, resultEvent } from "./partner/webhooks.js";
 export const normalize = (text) =>
   String(text || "")
     .trim()
@@ -68,7 +69,11 @@ export async function finishAttempt(id, user, expired = false) {
           ? { institutionId: user.institutionId, studentId: user.id }
           : {}),
       },
-      include: { result: true, exam: { include: { institution: true } } },
+      include: {
+        result: true,
+        exam: { include: { institution: true } },
+        student: { select: { externalId: true } },
+      },
     });
     if (!a) fail(404, "Attempt not found.");
     if (a.status !== "STARTED") return a.result;
@@ -95,7 +100,7 @@ export async function finishAttempt(id, user, expired = false) {
         released: a.exam.releaseResults && summary.status === "GRADED",
       },
     });
-    await tx.examAttempt.update({
+    const updated = await tx.examAttempt.update({
       where: { id },
       data: {
         status: expired
@@ -105,6 +110,17 @@ export async function finishAttempt(id, user, expired = false) {
             : "GRADING",
       },
     });
+    const finished = { ...a, ...updated };
+    await emit(tx, a.institutionId, "attempt.submitted", {
+      ...attemptEvent(finished),
+      expired,
+    });
+    await emit(
+      tx,
+      a.institutionId,
+      result.status === "GRADED" ? "result.ready" : "result.pending_grading",
+      resultEvent(result, finished),
+    );
     return result;
   });
 }

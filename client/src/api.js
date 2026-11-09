@@ -5,6 +5,22 @@ let refreshing;
 export const setToken = (t) => {
   accessToken = t || "";
 };
+// A launch session is a partner student inside one exam. It has no refresh
+// cookie, so it is kept for this tab only and survives a page refresh.
+const LAUNCH_KEY = "assessmentdesk-launch";
+export function getLaunchSession() {
+  try {
+    return JSON.parse(sessionStorage.getItem(LAUNCH_KEY) || "null");
+  } catch {
+    return null;
+  }
+}
+export function setLaunchSession(session) {
+  try {
+    if (session) sessionStorage.setItem(LAUNCH_KEY, JSON.stringify(session));
+    else sessionStorage.removeItem(LAUNCH_KEY);
+  } catch {}
+}
 api.interceptors.request.use((config) => {
   if (accessToken) config.headers.Authorization = `Bearer ${accessToken}`;
   return config;
@@ -16,7 +32,9 @@ api.interceptors.response.use(
     if (
       error.response?.status === 401 &&
       !config._retry &&
-      !config.url.startsWith("/auth/")
+      !config.url.startsWith("/auth/") &&
+      !config.url.startsWith("/launch/") &&
+      !getLaunchSession()
     ) {
       config._retry = true;
       try {

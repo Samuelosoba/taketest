@@ -30,7 +30,8 @@
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
     "db:setup": "node scripts/setup.mjs",
-    "db:mysql": "node scripts/setup.mjs --mysql",
+    "db:production": "node scripts/setup.mjs --production",
+    "vercel-build": "prisma generate --schema prisma/schema.prisma && prisma migrate deploy --schema prisma/schema.prisma",
     "test": "node --test --test-concurrency=1 test/*.test.js",
     "owner:create": "node scripts/create-owner.mjs"
   },

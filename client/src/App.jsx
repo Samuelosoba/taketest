@@ -34,8 +34,19 @@ import {
   Check,
   Mail,
   LockKeyhole,
+  KeyRound,
 } from "lucide-react";
-import { api, setToken, message } from "./api";
+import {
+  api,
+  setToken,
+  message,
+  getLaunchSession,
+  setLaunchSession,
+} from "./api";
+import { LaunchEntry, LaunchStart, LaunchDone } from "./Launch";
+import Developers from "./Developers";
+import Landing from "./Landing";
+import Docs from "./Docs";
 import { Loading, useToast, Field, Submit } from "./ui";
 import {
   Dashboard,
@@ -70,11 +81,20 @@ export function Logo({ light = false }) {
   );
 }
 export default function App() {
+  const location = useLocation();
   const [user, setUser] = useState(null),
     [ready, setReady] = useState(false);
   const cache = useQueryClient();
   useEffect(() => {
     let live = true;
+    // A partner launch session lives in this tab only and has no refresh cookie.
+    const launch = getLaunchSession();
+    if (launch) {
+      setToken(launch.token);
+      setUser(launch.user);
+      setReady(true);
+      return;
+    }
     api
       .post("/auth/refresh")
       .then((r) => {
@@ -103,7 +123,8 @@ export default function App() {
     setUser(data.user);
   };
   const logout = async () => {
-    await api.post("/auth/logout").catch(() => {});
+    if (getLaunchSession()) setLaunchSession(null);
+    else await api.post("/auth/logout").catch(() => {});
     setToken("");
     setUser(null);
     cache.clear();
@@ -114,6 +135,7 @@ export default function App() {
       <Routes>
         <Route path="/verify/:code" element={<CertificateVerification />} />
         <Route path="/welcome" element={<Landing />} />
+        <Route path="/docs" element={<Docs />} />
         <Route
           path="/login"
           element={user ? <Navigate to="/" /> : <AuthPage />}
@@ -125,6 +147,9 @@ export default function App() {
         <Route path="/forgot-password" element={<AuthPage mode="forgot" />} />
         <Route path="/reset-password" element={<AuthPage mode="reset" />} />
         <Route path="/verify-email" element={<AuthPage mode="verify" />} />
+        <Route path="/launch/start" element={<LaunchStart />} />
+        <Route path="/launch/done" element={<LaunchDone />} />
+        <Route path="/launch/:token" element={<LaunchEntry />} />
         <Route
           path="/attempt/:id"
           element={
@@ -133,60 +158,22 @@ export default function App() {
         />
         <Route
           path="/*"
-          element={user ? <Shell /> : <Navigate to="/login" replace />}
+          element={
+            // Partner launch sessions never see the workspace; the exam room's
+            // redirect to /results lands on the launch summary instead.
+            getLaunchSession() ? (
+              <Navigate to="/launch/done" replace />
+            ) : user ? (
+              <Shell />
+            ) : location.pathname === "/" ? (
+              <Landing />
+            ) : (
+              <Navigate to="/login" replace />
+            )
+          }
         />
       </Routes>
     </AuthContext.Provider>
-  );
-}
-function Landing() {
-  return (
-    <div className="landing">
-      <header>
-        <Logo />
-        <Link className="btn" to="/login">
-          Sign in <ArrowUpRight size={16} />
-        </Link>
-      </header>
-      <div className="landing-content">
-        <span className="pill">BUILT FOR BETTER LEARNING</span>
-        <h1>
-          Great assessments.
-          <br />
-          <em>Greater possibilities.</em>
-        </h1>
-        <p>
-          Your institution’s entire assessment journey, in one thoughtful
-          workspace. Create exams, reach your students, and turn results into
-          progress.
-        </p>
-        <Link to="/register" className="btn primary">
-          Create your workspace <ArrowRight size={18} />
-        </Link>
-        <div className="landing-features">
-          <span>
-            <Check /> Secure workspaces
-          </span>
-          <span>
-            <Check /> Automatic grading
-          </span>
-          <span>
-            <Check /> Paid examinations
-          </span>
-        </div>
-      </div>
-      <div className="landing-preview">
-        <div className="preview-icon">
-          <GraduationCap size={68} />
-        </div>
-        <h2>
-          Less administration.
-          <br />
-          More achievement.
-        </h2>
-        <p>Built for institutions. Designed for people.</p>
-      </div>
-    </div>
   );
 }
 function AuthPage({ mode = "login" }) {
@@ -535,6 +522,12 @@ const navItems = [
     roles: ["INSTITUTION_ADMIN", "EXAMINER"],
   },
   {
+    label: "Developers",
+    path: "/developers",
+    icon: KeyRound,
+    roles: ["INSTITUTION_ADMIN"],
+  },
+  {
     label: "Settings",
     path: "/settings",
     icon: Settings,
@@ -580,6 +573,7 @@ function Shell() {
     "/settings": <SettingsPage />,
     "/account": <AccountPage />,
     "/monitoring": <Monitoring />,
+    "/developers": <Developers />,
   };
   return (
     <div className="app-shell">

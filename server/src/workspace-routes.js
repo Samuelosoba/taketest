@@ -1,14 +1,15 @@
 import { Router } from "express";
 import bcrypt from "bcrypt";
 import { db, roles, tenant, fail, audit } from "./core.js";
+import { z, parse, userSchema } from "./validation.js";
 import {
-  z,
-  parse,
-  courseSchema,
-  questionSchema,
-  examSchema,
-  userSchema,
-} from "./validation.js";
+  createCourse,
+  updateCourse,
+  createQuestion,
+  updateQuestion,
+  deleteQuestion,
+  saveExam,
+} from "./services/content.js";
 export const workspace = Router();
 const author = roles("INSTITUTION_ADMIN", "EXAMINER");
 const admin = roles("INSTITUTION_ADMIN");
@@ -93,18 +94,12 @@ workspace.get("/courses", async (req, res) =>
   ),
 );
 workspace.post("/courses", author, async (req, res) => {
-  const row = await db.course.create({
-    data: { ...parse(courseSchema, req.body), institutionId: tenant(req) },
-  });
+  const row = await createCourse(tenant(req), req.body);
   await audit(req.user, "COURSE_CREATED", row.id);
   res.status(201).json(row);
 });
 workspace.patch("/courses/:id", author, async (req, res) => {
-  const result = await db.course.updateMany({
-    where: { id: req.params.id, institutionId: tenant(req) },
-    data: parse(courseSchema.partial(), req.body),
-  });
-  if (!result.count) fail(404, "Course not found.");
+  await updateCourse(tenant(req), req.params.id, req.body);
   await audit(req.user, "COURSE_UPDATED", req.params.id);
   res.json({ ok: true });
 });
@@ -117,29 +112,17 @@ workspace.get("/questions", author, async (req, res) =>
   ),
 );
 workspace.post("/questions", author, async (req, res) => {
-  const row = await db.question.create({
-    data: { ...parse(questionSchema, req.body), institutionId: tenant(req) },
-  });
+  const row = await createQuestion(tenant(req), req.body);
   await audit(req.user, "QUESTION_CREATED", row.id);
   res.status(201).json(row);
 });
 workspace.put("/questions/:id", author, async (req, res) => {
-  const result = await db.question.updateMany({
-    where: { id: req.params.id, institutionId: tenant(req) },
-    data: parse(questionSchema, req.body),
-  });
-  if (!result.count) fail(404, "Question not found.");
+  await updateQuestion(tenant(req), req.params.id, req.body);
   await audit(req.user, "QUESTION_UPDATED", req.params.id);
   res.json({ ok: true });
 });
 workspace.delete("/questions/:id", author, async (req, res) => {
-  const q = await db.question.findFirst({
-    where: { id: req.params.id, institutionId: tenant(req) },
-    include: { _count: { select: { exams: true } } },
-  });
-  if (!q) fail(404, "Question not found.");
-  if (q._count.exams) fail(409, "Remove this question from its exams first.");
-  await db.question.delete({ where: { id: q.id } });
+  await deleteQuestion(tenant(req), req.params.id);
   res.json({ ok: true });
 });
 workspace.get("/exams", async (req, res) => {
@@ -148,7 +131,11 @@ workspace.get("/exams", async (req, res) => {
     where: {
       institutionId: tenant(req),
       ...(student
-        ? { status: "PUBLISHED", course: { status: "PUBLISHED" } }
+        ? {
+            status: "PUBLISHED",
+            course: { status: "PUBLISHED" },
+            accessMode: "OPEN",
+          }
         : {}),
     },
     include: {
@@ -182,46 +169,13 @@ workspace.get("/exams", async (req, res) => {
     })),
   );
 });
-async function saveExam(req, id) {
-  const { questionIds, ...data } = parse(examSchema, req.body);
-  const institutionId = tenant(req);
-  return db.$transaction(async (tx) => {
-    if (id && !(await tx.exam.findFirst({ where: { id, institutionId } })))
-      fail(404, "Exam not found.");
-    if (
-      !(await tx.course.findFirst({
-        where: { id: data.courseId, institutionId },
-      }))
-    )
-      fail(400, "Choose a course from this institution.");
-    const ids = [...new Set(questionIds)];
-    if (
-      (await tx.question.count({
-        where: { id: { in: ids }, institutionId },
-      })) !== ids.length
-    )
-      fail(400, "Question does not belong to this institution.");
-    if (data.status === "PUBLISHED" && !ids.length)
-      fail(400, "Add at least one question before publishing.");
-    if (id) await tx.examQuestion.deleteMany({ where: { examId: id } });
-    const record = {
-      ...data,
-      startsAt: data.startsAt ? new Date(data.startsAt) : null,
-      endsAt: data.endsAt ? new Date(data.endsAt) : null,
-      questions: { create: ids.map((questionId) => ({ questionId })) },
-    };
-    return id
-      ? tx.exam.update({ where: { id }, data: record })
-      : tx.exam.create({ data: { ...record, institutionId } });
-  });
-}
 workspace.post("/exams", author, async (req, res) => {
-  const row = await saveExam(req);
+  const row = await saveExam(tenant(req), req.body);
   await audit(req.user, "EXAM_CREATED", row.id);
   res.status(201).json(row);
 });
 workspace.put("/exams/:id", author, async (req, res) => {
-  const row = await saveExam(req, req.params.id);
+  const row = await saveExam(tenant(req), req.body, req.params.id);
   await audit(req.user, "EXAM_UPDATED", row.id);
   res.json(row);
 });

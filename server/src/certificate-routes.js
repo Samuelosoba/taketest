@@ -2,6 +2,7 @@ import { Router } from "express";
 import PDFDocument from "pdfkit";
 import QRCode from "qrcode";
 import { db, tenant, fail, random, audit } from "./core.js";
+import { emit } from "./partner/webhooks.js";
 export const certificates = Router();
 certificates.post("/certificates/:resultId", async (req, res) => {
   const r = await db.result.findFirst({
@@ -17,14 +18,34 @@ certificates.post("/certificates/:resultId", async (req, res) => {
     },
   });
   if (!r) fail(404, "A released passing result is required.");
-  const c = await db.certificate.upsert({
-    where: { resultId: r.id },
-    create: { resultId: r.id, code: random().slice(0, 24) },
-    update: {},
-  });
-  await audit(req.user, "CERTIFICATE_ISSUED", c.id);
-  res.json(c);
+  res.json(await issueCertificate(r, req.actor));
 });
+export async function issueCertificate(result, actor) {
+  const existing = await db.certificate.findUnique({
+    where: { resultId: result.id },
+  });
+  if (existing) return existing;
+  try {
+    return await db.$transaction(async (tx) => {
+      const c = await tx.certificate.create({
+        data: { resultId: result.id, code: random().slice(0, 24) },
+      });
+      await audit(actor, "CERTIFICATE_ISSUED", c.id, tx);
+      await emit(tx, result.institutionId, "certificate.issued", {
+        certificateId: c.id,
+        resultId: result.id,
+        attemptId: result.attemptId,
+        code: c.code,
+        verifyUrl: `${process.env.APP_URL}/verify/${c.code}`,
+      });
+      return c;
+    });
+  } catch (e) {
+    // Two concurrent requests: the other one created it.
+    if (e.code !== "P2002") throw e;
+    return db.certificate.findUnique({ where: { resultId: result.id } });
+  }
+}
 certificates.get("/certificates", async (req, res) =>
   res.json(
     await db.certificate.findMany({
@@ -65,20 +86,22 @@ certificates.get("/certificates/:id/pdf", async (req, res) => {
           : {}),
       },
     },
-    include: {
-      result: {
-        include: {
-          attempt: {
-            include: {
-              student: true,
-              exam: { include: { institution: true } },
-            },
-          },
-        },
-      },
-    },
+    include: certificatePdfInclude,
   });
   if (!c) fail(404, "Certificate not found.");
+  await sendCertificatePdf(res, c);
+});
+export const certificatePdfInclude = {
+  result: {
+    include: {
+      attempt: {
+        include: { student: true, exam: { include: { institution: true } } },
+      },
+    },
+  },
+};
+// Streams a certificate (loaded with certificatePdfInclude) as a PDF.
+export async function sendCertificatePdf(res, c) {
   const a = c.result.attempt;
   const qr = await QRCode.toBuffer(`${process.env.APP_URL}/verify/${c.code}`);
   const pdf = new PDFDocument({ size: "A4", layout: "landscape", margin: 50 });
@@ -104,11 +127,9 @@ certificates.get("/certificates/:id/pdf", async (req, res) => {
     .fillColor("#142e27")
     .fontSize(30)
     .text(a.student.name, 50, 240, { align: "center" });
-  pdf
-    .fontSize(15)
-    .text(`has successfully completed ${a.exam.title}`, 50, 300, {
-      align: "center",
-    });
+  pdf.fontSize(15).text(`has successfully completed ${a.exam.title}`, 50, 300, {
+    align: "center",
+  });
   pdf.text(
     `Score: ${c.result.percentage}%  |  Grade: ${c.result.grade}`,
     50,
@@ -124,7 +145,7 @@ certificates.get("/certificates/:id/pdf", async (req, res) => {
     );
   pdf.image(qr, 685, 425, { width: 80 });
   pdf.end();
-});
+}
 export async function verifyCertificate(req, res) {
   const c = await db.certificate.findUnique({
     where: { code: req.params.code },

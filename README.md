@@ -1,6 +1,6 @@
 # AssessmentDesk
 
-A working multi-tenant examination MVP built from `AssessmentDesk_SaaS_Platform_Documentation.docx`. React/Vite frontend, Express API, Prisma persistence, MySQL deployment schema, and an isolated SQLite profile for local development.
+A working multi-tenant examination MVP built from `AssessmentDesk_SaaS_Platform_Documentation.docx`. React/Vite frontend, Express API, Prisma persistence, a PostgreSQL production schema (deployed on Vercel with Neon), and an isolated SQLite profile for local development.
 
 ## Run locally
 
@@ -41,6 +41,7 @@ Institution slug: **`greenfield`**. The General Science practice exam is free an
 - PDF certificates with QR verification links and public verification exposing only basic certificate identity.
 - Institution/student dashboards, platform metrics, activity charts, result analytics, audit logging, and institution subscription records managed by the owner.
 - Responsive desktop/mobile layouts, loading/error/empty states, dialogs, keyboard-accessible controls, and feedback notifications.
+- Partner integration: scoped API keys, the `/api/v1` REST API with external IDs, idempotency and pagination, single-use exam launch links for partner students, signed webhooks with retries, and a **Developers** settings page. See [docs/partner-api.md](docs/partner-api.md) and [docs/partner-integration-spec.md](docs/partner-integration-spec.md). Local development may deliver webhooks to `http://127.0.0.1` only when `WEBHOOK_ALLOW_PRIVATE=true` is set on the backend.
 
 ## Checks
 
@@ -74,37 +75,46 @@ The browser suite covers question and exam authoring, all administrator screens,
 
 Camera access requires a supported browser and HTTPS, or localhost/127.0.0.1 for development. Running `npm run dev` or `npm run build` copies the pinned MediaPipe WASM files into `client/public/proctoring/wasm`; the checked-in model is SHA-256 verified. All assets are served from the app's own origin, including the production build. If assets are missing, run `npm.cmd run prepare:proctoring` in `client`. The production CSP allows same-origin scripts and WebAssembly compilation.
 
-For an existing local database, stop the backend and run `npm.cmd run db:setup` in `server`. The additive SQLite upgrade preserves existing records. On MySQL, regenerate the client and run `prisma migrate deploy` to apply `20260922000000_proctoring`. Restart the backend afterward. The migration was applied to the local SQLite workspace; MySQL execution still requires a real deployment database.
+For an existing local database, stop the backend and run `npm.cmd run db:setup` in `server`. The additive SQLite upgrade preserves existing records. Restart the backend afterward.
 
 Browser behavior follows the [MDN beacon guidance](https://developer.mozilla.org/en-US/docs/Web/API/Navigator/sendBeacon) and [page visibility guidance](https://developer.mozilla.org/en-US/docs/Web/API/Page_Visibility_API). Local detection uses [MediaPipe Tasks Vision](https://github.com/google-ai-edge/mediapipe/blob/master/mediapipe/tasks/web/vision/README.md).
 
-## MySQL deployment
+## Deployment (Vercel + Neon Postgres)
 
-The canonical schema is `server/prisma/schema.prisma`; the MySQL initial migration is in `server/prisma/migrations`. `schema.local.prisma` is generated for development, with MySQL native column annotations removed. The implementation uses Prisma 6.19 for compatibility with this workstation's Node.js 22.14 runtime. Dependency overrides address audited transitive vulnerabilities and are pinned in the lockfile.
+Production runs as two Vercel projects and a Neon Postgres database:
 
-1. Provision MySQL 8.0+ and a dedicated database/user. MySQL has not been provisioned on this workstation; the schema and SQL migration are generated and validated, but real MySQL execution still needs a deployment test.
-2. Set `DATABASE_URL=mysql://USER:PASSWORD@HOST:3306/assessmentdesk` in `server/.env`, together with a strong `JWT_SECRET`, your HTTPS `APP_URL`, and the production `PORT`.
-3. Generate the MySQL client and apply migrations:
+| Part | Vercel project | Root directory | URL |
+| --- | --- | --- | --- |
+| Frontend (React/Vite) | `assessmentdesk-web` | `client/` | https://assessmentdesk-web.vercel.app |
+| Backend (Express, serverless) | `assessmentdesk-api` | `server/` | https://assessmentdesk-api.vercel.app |
 
-```powershell
-cd server
-npx.cmd prisma generate --schema prisma/schema.prisma
-npx.cmd prisma migrate deploy --schema prisma/schema.prisma
-```
+- `client/vercel.json` forwards `/api/*` to the backend. To the browser everything is one site, so the same-site refresh cookie, CORS and the origin check need no changes. Other paths fall back to `index.html` for client-side routing.
+- `server/vercel.json` routes every request to `server/api/index.js`, which exports the Express app. The build runs `npm run vercel-build`, which generates the Prisma client and applies `prisma migrate deploy` to Neon.
+- Local development and tests still use SQLite. `scripts/local-schema.mjs` derives `schema.local.prisma` from the Postgres schema.
 
-4. Build the client with `npm.cmd run build` from the project root. Run the API with `NODE_ENV=production` and `npm.cmd start`; Express serves `client/dist`. Place an HTTPS reverse proxy in front of the loopback listener, forwarding to port 4000. Set `APP_URL` to that public HTTPS origin. Secure refresh cookies require HTTPS in production.
-5. Use institution registration to create the first workspace. Provision the platform owner with the script below; it creates a real bcrypt-hashed account without seeding demo data:
+**Backend environment variables:**
+- `DATABASE_URL` (pooled) and `DATABASE_URL_UNPOOLED` (direct, used for migrations). The Neon integration adds both.
+- `JWT_SECRET`
+- `APP_URL`: the frontend URL. It is used for CORS, the origin check, launch links and certificate links.
+- `CRON_SECRET`
+- Optional: `PAYSTACK_SECRET_KEY`, the SMTP variables, `MAIL_FROM`, `API_RATE_LIMIT_PER_MINUTE`.
 
-```powershell
-cd server
-$env:OWNER_EMAIL='owner@your-domain.example'
-$env:OWNER_NAME='Platform Owner'
-$env:OWNER_PASSWORD='a-long-unique-password'
-npm.cmd run owner:create
-Remove-Item Env:OWNER_PASSWORD
-```
+**Background work.** Serverless functions can't run the 15-second timer, so this work runs through `GET /api/cron/sweep` with `Authorization: Bearer <CRON_SECRET>`:
+- auto-submitting expired attempts
+- flagging silent disconnections
+- delivering webhooks
 
-Do not seed public demo credentials into production. Switching providers generates a different Prisma client; regenerate the local client with `npm.cmd run db:setup` when returning to local development. SQLite files are not automatically migrated into MySQL.
+Vercel Cron calls it once a day, which is the Hobby plan's limit. For exams, call it every minute from an external scheduler (for example cron-job.org) with that header, or upgrade to Vercel Pro and change the schedule in `server/vercel.json`. Deadlines are always enforced when a student returns, but auto-submission and webhooks wait for the next sweep.
+
+**Deploy updates** from each folder with `npx vercel@latest deploy --prod`, or connect the GitHub repo with root directories `server` and `client`.
+
+**Create the platform owner** for an empty production database:
+1. Run `npx vercel@latest env pull .env.production.local` in `server/`.
+2. Run `owner:create` with that file's `DATABASE_URL` and `OWNER_*` variables, after `npx prisma generate --schema prisma/schema.prisma`.
+3. Run `npm run db:setup` afterwards to restore the local SQLite client.
+4. Delete the pulled env file.
+
+Never seed the demo accounts into production.
 
 ## Paystack and email configuration
 
@@ -118,7 +128,7 @@ The implementation follows [Paystack webhook signature guidance](https://paystac
 
 This is a locally verified MVP, not a claim of production readiness or a completed implementation of every future item in the document.
 
-- Connect and run end-to-end checks against your real MySQL database, Paystack test/live accounts, SMTP service, and HTTPS deployment. No real payment was charged or live email sent during development.
+- Run end-to-end checks against the production Neon database, Paystack test/live accounts, SMTP service, and HTTPS deployment. No real payment was charged or live email sent during development.
 - Subscription plans are owner-managed records. Automated SaaS subscription checkout, renewal, plan quotas, and billing enforcement are not connected.
 - Question images use HTTPS URLs. Cloudinary uploads, institution/profile image uploads, and custom certificate templates are not implemented.
 - The header provides guidance to results/payments; a persistent in-app notification inbox and automatic payment/result notification emails remain to be added.
@@ -134,7 +144,7 @@ client/tests/           Playwright browser workflows
 server/src/core.js     Database, authentication, sessions, mail helpers
 server/src/*-routes.js Validated role/tenant scoped API areas
 server/src/grading.js  Authoritative grading and expiry processing
-server/prisma/         MySQL schema/migration, local schema, seed
+server/prisma/         Postgres schema/migration, local schema, seed
 server/test/           API/security integration checks
 scripts/dev.mjs        Starts the frontend and backend together
 ```

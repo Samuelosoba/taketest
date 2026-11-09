@@ -2,8 +2,10 @@ import { Router } from "express";
 import { randomInt } from "node:crypto";
 import { db, roles, tenant, fail, audit } from "./core.js";
 import { z, parse } from "./validation.js";
-import { candidateAttempt, finishAttempt, summarize } from "./grading.js";
+import { candidateAttempt, finishAttempt } from "./grading.js";
 import { eventSchema, recordEvent, heartbeat } from "./proctoring.js";
+import { releaseResult, gradeResult } from "./services/results.js";
+import { emit, attemptEvent } from "./partner/webhooks.js";
 export const attempts = Router();
 const student = roles("STUDENT"),
   author = roles("INSTITUTION_ADMIN", "EXAMINER");
@@ -31,6 +33,9 @@ attempts.post("/exams/:id/start", student, async (req, res) => {
       },
     });
     if (!exam) fail(404, "Exam not found.");
+    // Launch-only exams are started through a partner launch, never directly.
+    if (exam.accessMode === "LAUNCH_ONLY" && !req.launch)
+      fail(403, "Start this exam from your institution's dashboard.");
     const now = new Date();
     if (
       (exam.startsAt && exam.startsAt > now) ||
@@ -54,8 +59,10 @@ attempts.post("/exams/:id/start", student, async (req, res) => {
       fail(400, "Complete the camera check before starting this examination.");
     if (old.length >= exam.maxAttempts)
       fail(403, "You have used all available attempts.");
+    // A partner launch is the partner's access grant; they bill their students.
     if (
       exam.price > 0 &&
+      !req.launch &&
       !(await tx.payment.findFirst({
         where: {
           institutionId,
@@ -78,11 +85,12 @@ attempts.post("/exams/:id/start", student, async (req, res) => {
         exam.endsAt?.getTime() || Infinity,
       ),
     );
-    return tx.examAttempt.create({
+    const created = await tx.examAttempt.create({
       data: {
         institutionId,
         examId: exam.id,
         studentId: req.user.id,
+        launchId: req.launch?.id ?? null,
         number: (old[0]?.number || 0) + 1,
         expectedEndAt: end,
         answers: {},
@@ -99,6 +107,17 @@ attempts.post("/exams/:id/start", student, async (req, res) => {
         userAgent: (req.headers["user-agent"] || "").slice(0, 250),
       },
     });
+    await emit(
+      tx,
+      institutionId,
+      "attempt.started",
+      attemptEvent({
+        ...created,
+        exam,
+        student: { externalId: req.user.externalId },
+      }),
+    );
+    return created;
   });
   if (a.expectedEndAt <= new Date() && a.status === "STARTED") {
     await finishAttempt(a.id, req.user, true);
@@ -256,11 +275,7 @@ attempts.get("/results", async (req, res) => {
   res.json(rows);
 });
 attempts.post("/results/:id/release", author, async (req, res) => {
-  const row = await db.result.updateMany({
-    where: { id: req.params.id, institutionId: tenant(req), status: "GRADED" },
-    data: { released: true },
-  });
-  if (!row.count) fail(404, "A completed result was not found.");
+  await releaseResult(tenant(req), req.params.id);
   await audit(req.user, "RESULT_RELEASED", req.params.id);
   res.json({ ok: true });
 });
@@ -282,63 +297,7 @@ attempts.get("/grading", author, async (req, res) =>
   ),
 );
 attempts.post("/grading/:id", author, async (req, res) => {
-  const { grades } = parse(
-    z.object({
-      grades: z
-        .array(
-          z.object({
-            questionId: z.string(),
-            awarded: z.number().min(0),
-            comment: z.string().max(2000).default(""),
-          }),
-        )
-        .min(1),
-    }),
-    req.body,
-  );
-  const result = await db.$transaction(async (tx) => {
-    const r = await tx.result.findFirst({
-      where: {
-        id: req.params.id,
-        institutionId: tenant(req),
-        status: "UNDER_REVIEW",
-      },
-      include: { attempt: { include: { exam: true } } },
-    });
-    if (!r) fail(404, "Pending result not found.");
-    const lock = await tx.examAttempt.updateMany({
-      where: { id: r.attemptId, version: r.attempt.version },
-      data: { version: { increment: 1 } },
-    });
-    if (!lock.count) fail(409, "This result changed. Refresh and retry.");
-    const breakdown = r.breakdown.map((b) => ({ ...b }));
-    for (const g of grades) {
-      const q = r.attempt.snapshot.questions.find((q) => q.id === g.questionId);
-      if (!q || q.type !== "ESSAY" || g.awarded > q.marks)
-        fail(400, "Marks must be within the essay question maximum.");
-      Object.assign(
-        breakdown.find((b) => b.questionId === q.id),
-        g,
-      );
-    }
-    const summary = summarize(
-      breakdown,
-      r.attempt.snapshot.passMark,
-      r.attempt.snapshot.gradingBands,
-    );
-    if (summary.status === "GRADED")
-      await tx.examAttempt.update({
-        where: { id: r.attemptId },
-        data: { status: "GRADED" },
-      });
-    return tx.result.update({
-      where: { id: r.id },
-      data: {
-        ...summary,
-        released: summary.status === "GRADED" && r.attempt.exam.releaseResults,
-      },
-    });
-  });
+  const result = await gradeResult(tenant(req), req.params.id, req.body);
   await audit(req.user, "ESSAY_GRADED", result.id);
   res.json(result);
 });

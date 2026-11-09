@@ -26,15 +26,53 @@ export const publicUser = (u) => ({
   emailVerified: u.emailVerified,
   institution: u.institution,
 });
-export const audit = (u, action, targetId) =>
-  db.auditLog.create({
-    data: { institutionId: u?.institutionId, userId: u?.id, action, targetId },
+// The actor is a signed-in user, a partner API key ({ type: "API_KEY" }), or
+// null for system work such as the expiry worker.
+export const audit = (actor, action, targetId, client = db) =>
+  client.auditLog.create({
+    data: {
+      institutionId: actor?.institutionId,
+      ...(actor?.type === "API_KEY"
+        ? { apiKeyId: actor.id }
+        : { userId: actor?.id }),
+      action,
+      targetId,
+    },
   });
+// Routes a launch session (a partner student inside one exam) may call. The
+// route handlers still check that each attempt belongs to the student.
+const launchRoutes = [
+  ["POST", /^\/exams\/([^/]+)\/start$/, "exam"],
+  ["GET", /^\/attempts\/([^/]+)$/, "attempt"],
+  ["PUT", /^\/attempts\/([^/]+)\/answers$/, "attempt"],
+  ["POST", /^\/attempts\/([^/]+)\/(submit|events|heartbeat)$/, "attempt"],
+  ["GET", /^\/launch\/result$/, "self"],
+];
+async function checkLaunchRoute(req, claims) {
+  // Use the full URL: req.path depends on where the middleware is mounted.
+  const path = req.originalUrl.split("?")[0].replace(/^\/api(?=\/)/, "");
+  for (const [method, pattern, kind] of launchRoutes) {
+    const match = req.method === method && path.match(pattern);
+    if (!match) continue;
+    if (kind === "self") return;
+    if (kind === "exam" && match[1] === claims.examId) return;
+    if (
+      kind === "attempt" &&
+      (await db.examAttempt.count({
+        where: { id: match[1], examId: claims.examId, studentId: claims.sub },
+      }))
+    )
+      return;
+    break;
+  }
+  fail(403, "This exam session cannot access that resource.");
+}
 export async function auth(req, res, next) {
   try {
     const token = req.headers.authorization?.replace(/^Bearer /, "");
     const payload = jwt.verify(token || "", secret, { algorithms: ["HS256"] });
-    if (payload.scope) fail(401, "An access token is required.");
+    if (payload.scope && payload.scope !== "launch")
+      fail(401, "An access token is required.");
     const user = await db.user.findUnique({
       where: { id: payload.sub },
       include: { institution: true },
@@ -42,7 +80,17 @@ export async function auth(req, res, next) {
     if (!user?.active) fail(401, "Please sign in again.");
     if (user.institution && user.institution.status !== "ACTIVE")
       fail(403, "Your institution is not active. Contact your administrator.");
+    if (payload.scope === "launch") {
+      if (
+        user.role !== "STUDENT" ||
+        user.institutionId !== payload.institutionId
+      )
+        fail(401, "This exam session is no longer valid.");
+      await checkLaunchRoute(req, payload);
+      req.launch = { id: payload.launchId, examId: payload.examId };
+    }
     req.user = user;
+    req.actor = user;
     next();
   } catch (e) {
     next(
@@ -64,9 +112,10 @@ export const roles =
           ),
         );
 export const tenant = (req) => {
-  if (!req.user.institutionId)
+  const institutionId = (req.actor || req.user)?.institutionId;
+  if (!institutionId)
     fail(403, "This action requires an institution workspace.");
-  return req.user.institutionId;
+  return institutionId;
 };
 export async function session(user, res) {
   const refresh = random();

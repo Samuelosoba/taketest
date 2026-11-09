@@ -13,8 +13,16 @@ import { attempts } from "./attempt-routes.js";
 import { payments, webhook } from "./payment-routes.js";
 import { certificates, verifyCertificate } from "./certificate-routes.js";
 import { receiveExitBeacon } from "./proctoring.js";
+import { v1 } from "./v1/index.js";
+import { launchPublic, launchResult } from "./partner/launches.js";
+import { developer } from "./partner/developer-routes.js";
+import { cronSweep } from "./sweep.js";
 export const app = express();
 app.disable("x-powered-by");
+// Behind a hosting proxy (Vercel, Render, a reverse proxy) req.ip must come
+// from X-Forwarded-For, or every visitor shares one rate-limit bucket.
+const proxyHops = process.env.TRUST_PROXY ?? (process.env.VERCEL ? "1" : "");
+if (proxyHops) app.set("trust proxy", Number(proxyHops));
 app.use(
   helmet({
     contentSecurityPolicy: {
@@ -41,6 +49,9 @@ app.use(
     limit: 300,
     standardHeaders: "draft-7",
     legacyHeaders: false,
+    // The partner API has its own per-key limit (all partner traffic can come
+    // from one server IP).
+    skip: (req) => req.path.startsWith("/v1/"),
   }),
 );
 app.post(
@@ -60,10 +71,14 @@ app.use("/api", (req, res, next) => {
   next();
 });
 app.get("/api/health", (req, res) => res.json({ status: "ok" }));
+app.get("/api/cron/sweep", cronSweep);
 app.use("/api/auth", authRouter);
 app.get("/api/public/certificates/:code", verifyCertificate);
 app.post("/api/attempts/:id/exit-beacon", receiveExitBeacon);
-app.use("/api", auth, workspace, attempts, payments, certificates);
+app.use("/api/v1", v1);
+app.use("/api/launch", launchPublic);
+app.get("/api/launch/result", auth, launchResult);
+app.use("/api", auth, workspace, attempts, payments, certificates, developer);
 app.use("/api", (req, res) =>
   res.status(404).json({ message: "Endpoint not found." }),
 );
@@ -89,7 +104,14 @@ app.use((error, req, res, next) => {
   if (error.code === "P2025")
     return res.status(404).json({ message: "Record not found." });
   if (error.type === "entity.parse.failed")
-    return res.status(400).json({ message: "Invalid JSON." });
+    // Body parsing runs before the v1 router, so match its error format here.
+    return res
+      .status(400)
+      .json(
+        req.originalUrl.startsWith("/api/v1/")
+          ? { error: { code: "invalid_json", message: "Invalid JSON." } }
+          : { message: "Invalid JSON." },
+      );
   if (!error.status) console.error(error);
   res.status(error.status || 500).json({
     message: error.status

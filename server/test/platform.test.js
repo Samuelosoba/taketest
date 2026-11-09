@@ -2,6 +2,7 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { writeFileSync, existsSync, readFileSync, unlinkSync } from "node:fs";
+import { writeLocalSchema } from "../scripts/local-schema.mjs";
 import { randomUUID } from "node:crypto";
 // Always use a unique disposable database, never the developer's database.
 const file = `test-${randomUUID()}.db`;
@@ -10,12 +11,7 @@ process.env.JWT_SECRET = "test-secret-which-is-longer-than-32-characters";
 process.env.APP_URL = "http://localhost:5173";
 process.env.PAYSTACK_SECRET_KEY = "";
 writeFileSync(`prisma/${file}`, "");
-writeFileSync(
-  "prisma/schema.local.prisma",
-  readFileSync("prisma/schema.prisma", "utf8")
-    .replace('provider = "mysql"', 'provider = "sqlite"')
-    .replace(/ @db\.\w+(\([^)]*\))?/g, ""),
-);
+writeLocalSchema();
 execFileSync(
   process.execPath,
   [

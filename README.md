@@ -106,7 +106,12 @@ Production runs as two Vercel projects and a Neon Postgres database:
 
 Vercel Cron calls it once a day, which is the Hobby plan's limit. For exams, call it every minute from an external scheduler (for example cron-job.org) with that header, or upgrade to Vercel Pro and change the schedule in `server/vercel.json`. Deadlines are always enforced when a student returns, but auto-submission and webhooks wait for the next sweep.
 
-**Deploy updates** from each folder with `npx vercel@latest deploy --prod`, or connect the GitHub repo with root directories `server` and `client`.
+**Deploy updates by pushing to GitHub.** Both projects are connected to `Samuelosoba/taketest`:
+- Pushing to `main` deploys production. The frontend uses root directory `client`, the backend `server`.
+- Other branches get frontend preview deployments. Previews call the production API.
+- The backend skips preview builds with an Ignored Build Step, because previews would lack production secrets and share the production database.
+
+With root directories set, run any manual `vercel deploy` from the repository root, not from inside `client/` or `server/`.
 
 **Create the platform owner** for an empty production database:
 1. Run `npx vercel@latest env pull .env.production.local` in `server/`.
